@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import PropertyGroup, Scene, Panel, Operator, Object, PropertyGroup
-from bpy.props import BoolProperty, PointerProperty, FloatProperty, EnumProperty
+from bpy.props import BoolProperty, PointerProperty, FloatProperty, EnumProperty, StringProperty
 from bpy.utils import register_class, unregister_class
 
 bl_info = {
@@ -28,9 +28,6 @@ collider_types = [
     ('mesh', 'Mesh', ''),
     ('compound', 'Compound', '')
 ]
-
-# collider_properties_name = 'gltf2_omi_collider_properties'
-# collider_properties_defaults = dict(collider_type=collider_types[0], collider_istrigger=0)
 
 class OMIColliderProperties(PropertyGroup):
     is_collider: BoolProperty(name='Is Collider')
@@ -148,35 +145,12 @@ class GLTF_PT_OMIColliderObjectPropertiesPanel(Panel):
         collider_props = active_obj.OMIColliderProperties
         
         layout = self.layout
-
+        
         layout.prop(collider_props, 'is_collider')
         
         if collider_props is not None and collider_props.is_collider:
             layout.prop(collider_props, 'collider_type')
             layout.prop(collider_props, 'collider_is_trigger')
-
-# class GLTF_OT_OMIColliderAddProperties(Operator):
-
-#     bl_idname = 'gltf2_omi_collider_extension.add_properties'
-#     bl_label = 'Add OMI_Collider Properties'
-#     bl_description = 'Add the properties describing the collider to the object.'
-#     bl_options = {'REGISTER', 'UNDO'}
-
-#     @classmethod
-#     def poll(cls, context):
-#         return True if _is_mesh_object_active(context) else None
-
-#     def execute(self, context):
-#         active_obj = context.active_object
-#         collider_props = active_obj.get(collider_properties_name, None)
-
-#         if collider_props is None:
-#             active_obj[collider_properties_name] = collider_properties_defaults.copy()
-        
-#         return {'FINISHED'}
-    
-#     def invoke(self, context, event):
-#         return self.execute(context)
 
 class glTF2ExportUserExtension:
 
@@ -185,21 +159,114 @@ class glTF2ExportUserExtension:
         self.Extension = Extension
         self.properties = bpy.context.scene.OMIColliderExportExtensionProperties
 
+    def _get_axis_min_and_max(self, mesh):
+        x_min, x_max = None, None
+        y_min, y_max = None, None
+        z_min, z_max = None, None
+        
+        for vertex in mesh.vertices:
+            x, y, z = vertex.co
+
+            if x_min is None: x_min = x
+            if x_max is None: x_max = x
+
+            if y_min is None: y_min = y
+            if y_max is None: y_max = y
+
+            if z_min is None: z_min = z
+            if z_max is None: z_max = z
+            
+            if x < x_min: x_min = x
+            elif x > x_max: x_max = x
+
+            if y < y_min: y_min = y
+            elif y > y_max: y_max = y
+
+            if z < z_min: z_min = z
+            elif z > z_max: z_max = z
+
+        return (
+            (x_min, x_max),
+            (y_min, y_max),
+            (z_min, z_max)
+        )
+        
+    def _get_half_extents_for_mesh(self, mesh):
+        axes = self._get_axis_min_and_max(mesh)
+        x_axis, y_axis, z_axis = axes
+
+        x_min, x_max = x_axis
+        y_min, y_max = y_axis
+        z_min, z_max = z_axis
+            
+        x_extent = abs(x_min - x_max) * 0.5
+        y_extent = abs(y_min - y_max) * 0.5
+        z_extent = abs(z_min - z_max) * 0.5
+        
+        return (x_extent, y_extent, z_extent)
+
+    def _get_radius_for_mesh(self, mesh):
+        extents = self._get_half_extents_for_mesh(mesh)
+        x_extent, y_extent, z_extent = extents
+
+        radius = x_extent if x_extent > y_extent else y_extent
+        
+        return radius
+
+    def _get_height_for_mesh(self, mesh):
+        axes = self._get_axis_min_and_max(mesh)
+        x_axis, y_axis, z_axis = axes
+
+        z_min, z_max = z_axis
+
+        height = abs(z_min - z_max)
+        
+        return height
+        
+    def _collect_extension_data(self, gltf2_object, blender_object, export_settings):
+        extension_data = {}
+        
+        collider_props = blender_object.OMIColliderProperties
+        collider_type = collider_props.collider_type
+
+        extension_data['type'] = collider_type
+        if collider_props.collider_is_trigger: extension_data['isTrigger'] = True
+
+        mesh = blender_object.data
+        
+        if collider_type == 'box':
+            extension_data['extents'] = self._get_half_extents_for_mesh(mesh)
+        elif collider_type == 'sphere':
+            extension_data['radius'] = self._get_radius_for_mesh(mesh)
+        elif collider_type == 'capsule':
+            extension_data['radius'] = self._get_radius_for_mesh(mesh)
+            extension_data['height'] = self._get_height_for_mesh(mesh)
+        
+        return extension_data
+        
     def gather_node_hook(self, gltf2_object, blender_object, export_settings):
         if self.properties.enabled:
-            if gltf2_object.extensions is None: gltf2_object.extensions = {}
+            collider_props = blender_object.OMIColliderProperties
+            
+            if collider_props.is_collider:
+                if gltf2_object.extensions is None: gltf2_object.extensions = {}
 
-            gltf2_object.extensions[glTF_extension_name] = self.Extension(
-                name=glTF_extension_name,
-                extension={'float': self.properties.float_property},
-                required=extension_is_required
-            )
+                extension_data = self._collect_extension_data(gltf2_object, blender_object, export_settings)
+                
+                gltf2_object.extensions[glTF_extension_name] = self.Extension(
+                    name=glTF_extension_name,
+                    extension=extension_data,
+                    required=extension_is_required
+                )
 
 class glTF2ImportUserExtension:
 
     def __init__(self):
         self.properties = bpy.context.scene.OMIColliderImportExtensionProperties
-        self.extensions = [Extension(name="TEST_extension1", extension={}, required=True), Extension(name="TEST_extension2", extension={}, required=False)]
+        self.extensions = [
+            Extension(name="TEST_extension1", extension={}, required=True),
+            Extension(name="TEST_extension2", extension={}, required=False)
+        ]
 
     def gather_import_node_before_hook(self, vnode, gltf_node, import_settings):
         if self.properties.enabled:
@@ -213,7 +280,6 @@ addon_classes = [
     OMIColliderExportExtensionProperties,
     OMIColliderImportExtensionProperties,
     OMIColliderProperties,
-    GLTF_OT_OMIColliderAddProperties,
     GLTF_PT_OMIColliderObjectPropertiesPanel
 ]
 

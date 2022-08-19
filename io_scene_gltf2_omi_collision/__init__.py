@@ -1,3 +1,5 @@
+import types
+
 import bpy
 from bpy.types import PropertyGroup, Scene, Panel, Operator, Object, PropertyGroup
 from bpy.props import BoolProperty, PointerProperty, FloatProperty, EnumProperty, StringProperty
@@ -222,7 +224,33 @@ class glTF2ExportUserExtension:
         height = abs(z_min - z_max)
         
         return height
+
+    def _is_hull_convex(self, mesh):
+        return True
+
+    def _modify_node_json_result(self, node_result):
+        mesh_id = node_result.get('mesh', None)
         
+        if 'mesh' in node_result: del node_result['mesh']
+
+        extension_omi_collider = node_result.get('extensions', {}).get(glTF_extension_name, None)
+        
+        if extension_omi_collider is not None and type(extension_omi_collider) is dict:
+            collider_type = extension_omi_collider.get('type', None)
+            
+            if collider_type == 'hull' or collider_type == 'mesh':
+                extension_omi_collider['mesh'] = mesh_id
+
+        return node_result
+
+    def _node_to_dict_wrapper(self, func, gltf2_object):
+
+        def wrapper(*args, **kwargs):
+            result = func()
+            return self._modify_node_json_result(result)
+
+        return wrapper
+    
     def _collect_extension_data(self, gltf2_object, blender_object, export_settings):
         extension_data = {}
         
@@ -235,12 +263,22 @@ class glTF2ExportUserExtension:
         mesh = blender_object.data
         
         if collider_type == 'box':
+            gltf2_object.mesh = None
             extension_data['extents'] = self._get_half_extents_for_mesh(mesh)
         elif collider_type == 'sphere':
+            gltf2_object.mesh = None
             extension_data['radius'] = self._get_radius_for_mesh(mesh)
         elif collider_type == 'capsule':
+            gltf2_object.mesh = None
             extension_data['radius'] = self._get_radius_for_mesh(mesh)
             extension_data['height'] = self._get_height_for_mesh(mesh)
+        elif collider_type == 'hull':
+            if self._is_hull_convex(mesh) is not True:
+                raise Exception('Mesh is not a convex hull : {}'.format(blender_object.name))
+        elif collider_type == 'mesh':
+            pass
+
+        setattr(gltf2_object, 'to_dict', self._node_to_dict_wrapper(gltf2_object.to_dict, gltf2_object))
         
         return extension_data
         
@@ -258,6 +296,9 @@ class glTF2ExportUserExtension:
                     extension=extension_data,
                     required=extension_is_required
                 )
+
+    # def gather_gltf_extensions_hook(self, gltf2, export_settings):
+    #     print('gltf2 type : {}'.format(type(gltf2)))
 
 class glTF2ImportUserExtension:
 

@@ -43,23 +43,11 @@ class OMIColliderExportExtensionProperties(PropertyGroup):
         default=True
     )
 
-    float_property: FloatProperty(
-        name='Test FloatProperty',
-        description='Testing a float property...',
-        default=2.0
-    )
-
 class OMIColliderImportExtensionProperties(PropertyGroup):
     enabled: BoolProperty(
         name=bl_info['name'],
         description='Run this extension while importing glTF file.',
         default=True
-    )
-    
-    float_property: FloatProperty(
-        name='Test FloatProperty',
-        description='Testing a float property...',
-        default=1.0
     )
 
 class GLTF_PT_OMIColliderExportExtensionPanel(Panel):
@@ -91,9 +79,6 @@ class GLTF_PT_OMIColliderExportExtensionPanel(Panel):
         box = layout.box()
         box.label(text=glTF_extension_name)
 
-        props = bpy.context.scene.OMIColliderExportExtensionProperties
-        layout.prop(props, 'float_property', text='test float value')
-
 class GLTF_PT_OMIColliderImportExtensionPanel(Panel):
 
     bl_space_type = 'FILE_BROWSER'
@@ -122,8 +107,6 @@ class GLTF_PT_OMIColliderImportExtensionPanel(Panel):
 
         box = layout.box()
         box.label(text=glTF_extension_name)
-
-        layout.prop(props, 'float_property', text="test float value")
 
 def _is_mesh_object_active(context):
     objs = context.selected_objects
@@ -158,7 +141,7 @@ class glTF2ExportUserExtension:
 
     def __init__(self):
         from io_scene_gltf2.io.com.gltf2_io_extensions import Extension
-        self.Extension = Extension
+        self.extension = Extension
         self.properties = bpy.context.scene.OMIColliderExportExtensionProperties
 
     def _get_axis_min_and_max(self, mesh):
@@ -291,22 +274,19 @@ class glTF2ExportUserExtension:
 
                 extension_data = self._collect_extension_data(gltf2_object, blender_object, export_settings)
                 
-                gltf2_object.extensions[glTF_extension_name] = self.Extension(
+                gltf2_object.extensions[glTF_extension_name] = self.extension(
                     name=glTF_extension_name,
                     extension=extension_data,
                     required=extension_is_required
                 )
-
-    # def gather_gltf_extensions_hook(self, gltf2, export_settings):
-    #     print('gltf2 type : {}'.format(type(gltf2)))
 
 class glTF2ImportUserExtension:
 
     def __init__(self):
         self.properties = bpy.context.scene.OMIColliderImportExtensionProperties
         self.extensions = [
-            Extension(name="TEST_extension1", extension={}, required=True),
-            Extension(name="TEST_extension2", extension={}, required=False)
+            # Extension(name="TEST_extension1", extension={}, required=True),
+            # Extension(name="TEST_extension2", extension={}, required=False)
         ]
 
     def gather_import_node_before_hook(self, vnode, gltf_node, import_settings):

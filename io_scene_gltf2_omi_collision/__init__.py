@@ -236,7 +236,6 @@ class GLTF_OT_OMIColliderCheckIfHullIsValidOperator(Operator):
             self.report({'INFO'}, 'Hull is valid.')
 
         return {'CANCELLED'}
-        # return {'FINISHED'}
     
     def invoke(self, context, event):
         return self.execute(context)

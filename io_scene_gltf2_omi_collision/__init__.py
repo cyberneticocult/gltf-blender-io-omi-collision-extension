@@ -5,6 +5,8 @@ from bpy.types import PropertyGroup, Scene, Panel, Operator, Object, PropertyGro
 from bpy.props import BoolProperty, PointerProperty, FloatProperty, EnumProperty, StringProperty
 from bpy.utils import register_class, unregister_class
 
+import bmesh
+
 bl_info = {
     'name': 'OMI_collider glTF Extension',
     'category': 'Generic',
@@ -111,6 +113,18 @@ class GLTF_PT_OMIColliderImportExtensionPanel(Panel):
 def _is_mesh_object_active(context):
     objs = context.selected_objects
     return True if len(objs) > 0 and context.active_object.type == 'MESH' else False
+
+def _is_valid_hull_mesh(mesh):
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+
+    is_convex = all([e.is_convex for e in bm.edges])
+    is_contiguous = all([e.is_contiguous for e in bm.edges])
+    is_manifold = all([e.is_manifold for e in bm.edges])
+    
+    bm.free()
+        
+    return is_convex and is_contiguous and is_manifold
     
 class GLTF_PT_OMIColliderObjectPropertiesPanel(Panel):
 
@@ -136,6 +150,96 @@ class GLTF_PT_OMIColliderObjectPropertiesPanel(Panel):
         if collider_props is not None and collider_props.is_collider:
             layout.prop(collider_props, 'collider_type')
             layout.prop(collider_props, 'collider_is_trigger')
+
+            layout.operator(
+                'gltf2_omi_collider_extension.check_if_hull_is_valid',
+                text='Check if Hull is Valid')
+                
+            layout.operator(
+                'gltf2_omi_collider_extension.select_invalid_hull_edges',
+                text='Select Invalid Hull Edges')
+
+class GLTF_OT_OMIColliderSelectInvalidHullEdgesOperator(Operator):
+
+    bl_idname = 'gltf2_omi_collider_extension.select_invalid_hull_edges'
+    bl_label = 'Select Invalid Hull Edges'
+    bl_description = 'Select edges that do not pass convextiy, manifold and contiguous tests.'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        if not _is_mesh_object_active(context): return False
+        
+        collider_props = context.active_object.OMIColliderProperties
+        
+        if collider_props is None: return False
+        if not collider_props.is_collider: return False
+        if collider_props.collider_type != 'hull': return False
+        
+        return True
+
+    def execute(self, context):
+        mesh = context.active_object.data
+
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+
+        non_convex_edges = [e.index for e in bm.edges if e.is_convex is False]
+        non_contiguous_edges = [e.index for e in bm.edges if e.is_contiguous is False]
+        non_manifold_edges = [e.index for e in bm.edges if e.is_manifold is False]
+        
+        bm.free()
+
+        invalid_edges = list(set(non_convex_edges + non_contiguous_edges + non_manifold_edges))
+
+        def _deslect_all():
+            for vertex in mesh.vertices: vertex.select = False
+            for edge in mesh.edges: edge.select = False
+            for polygon in mesh.polygons: polygon.select = False
+
+        def _select_invalid_edges():
+            for idx in invalid_edges: mesh.edges[idx].select = True
+
+        _deslect_all()
+        _select_invalid_edges()
+        
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        return self.execute(context)
+
+class GLTF_OT_OMIColliderCheckIfHullIsValidOperator(Operator):
+
+    bl_idname = 'gltf2_omi_collider_extension.check_if_hull_is_valid'
+    bl_label = 'Check If Hull Is Valid'
+    bl_description = 'Test if hull passes convextiy, manifold and contiguous tests.'
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        if not _is_mesh_object_active(context): return False
+
+        collider_props = context.active_object.OMIColliderProperties
+        
+        if collider_props is None: return False
+        if not collider_props.is_collider: return False
+        if collider_props.collider_type != 'hull': return False
+        
+        return True
+
+    def execute(self, context):
+        mesh = context.active_object.data
+
+        if not _is_valid_hull_mesh(mesh):
+            self.report({'WARNING'}, 'Hull is invalid and will not export as collider.')
+        else:
+            self.report({'INFO'}, 'Hull is valid.')
+
+        return {'CANCELLED'}
+        # return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        return self.execute(context)
 
 class glTF2ExportUserExtension:
 
@@ -208,8 +312,7 @@ class glTF2ExportUserExtension:
         
         return height
 
-    def _is_hull_convex(self, mesh):
-        return True
+    def _is_valid_hull(self, mesh): return _is_valid_hull_mesh(mesh)
 
     def _modify_node_json_result(self, node_result):
         mesh_id = node_result.get('mesh', None)
@@ -256,7 +359,7 @@ class glTF2ExportUserExtension:
             extension_data['radius'] = self._get_radius_for_mesh(mesh)
             extension_data['height'] = self._get_height_for_mesh(mesh)
         elif collider_type == 'hull':
-            if self._is_hull_convex(mesh) is not True:
+            if self._is_valid_hull(mesh) is not True:
                 raise Exception('Mesh is not a convex hull : {}'.format(blender_object.name))
         elif collider_type == 'mesh':
             pass
@@ -301,7 +404,9 @@ addon_classes = [
     OMIColliderExportExtensionProperties,
     OMIColliderImportExtensionProperties,
     OMIColliderProperties,
-    GLTF_PT_OMIColliderObjectPropertiesPanel
+    GLTF_PT_OMIColliderObjectPropertiesPanel,
+    GLTF_OT_OMIColliderSelectInvalidHullEdgesOperator,
+    GLTF_OT_OMIColliderCheckIfHullIsValidOperator
 ]
 
 extension_panel_classes = [

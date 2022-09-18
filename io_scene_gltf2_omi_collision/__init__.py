@@ -1,9 +1,12 @@
 import types
+import json
 
 import bpy
 from bpy.types import PropertyGroup, Scene, Panel, Operator, Object, PropertyGroup
 from bpy.props import BoolProperty, PointerProperty, FloatProperty, EnumProperty, StringProperty
 from bpy.utils import register_class, unregister_class
+
+from io_scene_gltf2.io.com.gltf2_io import Node
 
 import bmesh
 
@@ -35,6 +38,7 @@ collider_types = [
 
 class OMIColliderProperties(PropertyGroup):
     is_collider: BoolProperty(name='Is Collider')
+    is_display_mesh: BoolProperty(name='Is Display Mesh')
     collider_type: EnumProperty(items=collider_types, name='Collider Type')
     collider_is_trigger: BoolProperty(name='Is Trigger')
 
@@ -148,6 +152,7 @@ class GLTF_PT_OMIColliderObjectPropertiesPanel(Panel):
         layout.prop(collider_props, 'is_collider')
         
         if collider_props is not None and collider_props.is_collider:
+            layout.prop(collider_props, 'is_display_mesh')
             layout.prop(collider_props, 'collider_type')
             layout.prop(collider_props, 'collider_is_trigger')
 
@@ -346,7 +351,9 @@ class glTF2ExportUserExtension:
         if collider_props.collider_is_trigger: extension_data['isTrigger'] = True
 
         mesh = blender_object.data
-        
+
+        setattr(gltf2_object, '_collider_mesh', gltf2_object.mesh)
+            
         if collider_type == 'box':
             gltf2_object.mesh = None
             extension_data['extents'] = self._get_half_extents_for_mesh(mesh)
@@ -382,6 +389,58 @@ class glTF2ExportUserExtension:
                     required=extension_is_required
                 )
 
+                if collider_props.is_display_mesh: setattr(gltf2_object, 'is_display_mesh', True)
+
+    def _add_display_mesh_node(self, glTF, node):
+        node_index = glTF.nodes.index(node)
+
+        parent_node = None        
+        try: parent_node = next(n for n in glTF.nodes if node_index in n.children)
+        except: pass
+        
+        camera = None
+        children = [node_index]
+        extensions = {}
+        extras = None
+        matrix = []
+        mesh = node._collider_mesh
+        name = '{}_DisplayMesh'.format(node.name)
+        rotation = node.rotation
+        scale = node.scale
+        skin = None
+        translation = node.translation
+        weights = None
+
+        node.rotation = None
+        node.scale = None
+        node.translation = None
+        
+        display_mesh_node = Node(
+            camera, children, extensions, extras, matrix, mesh, name, rotation, scale,
+            skin, translation, weights)
+
+        glTF.nodes.append(display_mesh_node)
+        display_mesh_node_index = glTF.nodes.index(display_mesh_node)
+
+        def _replace_node_in_parent():
+            if parent_node is not None:
+                parent_node.children.remove(node_index)
+                parent_node.children.append(display_mesh_node_index)
+
+        def _replace_node_in_scenes():
+            for scene in glTF.scenes:
+                if node_index in scene.nodes:
+                    scene.nodes.remove(node_index)
+                    scene.nodes.append(display_mesh_node_index)
+
+        _replace_node_in_parent()
+        _replace_node_in_scenes()
+        
+    def gather_gltf_extensions_hook(self, glTF, export_settings):
+        for node in glTF.nodes:
+            if hasattr(node, 'is_display_mesh'): self._add_display_mesh_node(glTF, node)
+                
+
 class glTF2ImportUserExtension:
 
     def __init__(self):
@@ -399,6 +458,10 @@ class glTF2ImportUserExtension:
         if self.properties.enabled:
             pass
 
+def glTF2_pre_export_callback(export_settings): pass
+
+def glTF2_post_export_callback(export_settings): pass
+        
 addon_classes = [
     OMIColliderExportExtensionProperties,
     OMIColliderImportExtensionProperties,
